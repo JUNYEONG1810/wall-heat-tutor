@@ -4,6 +4,7 @@
 계산은 calc.py 가 수행하고, 이 파일은 화면만 담당한다.
 """
 
+import json
 import random
 from pathlib import Path
 
@@ -11,8 +12,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from calc import DEFAULT_H_TI, DEFAULT_H_TO, Layer, solve_air, solve_surface
+from challenge import (H_TI as CH_H_TI, H_TO as CH_H_TO, INSULATIONS, LEVELS, LV3_PRESETS, LV4_ANSWER, LV4_CHOICES,
+                       T_IA as CH_T_IA, T_OA as CH_T_OA, design_summary, evaluate, hints, lv4_results)
 from materials import CUSTOM, MATERIAL_PRESETS, TEXTBOOK_EXAMPLE, tutor_reference
 from quiz import CONCEPT_QUESTIONS, is_correct, make_round
+from viz3d import MODE_MATERIAL, MODE_TEMPERATURE, MODES, NOTE, wall_figure
 from tutor import TutorError, ask, calc_context, load_config
 
 st.set_page_config(page_title="다층벽 열전달 AI 튜터", page_icon="🧱", layout="wide")
@@ -333,6 +337,102 @@ if "quiz" not in ss:
     reset_quiz()
 
 
+# ---------------------------------------------------------------- 설계 챌린지 상태
+TAB_CHALLENGE = "🏗️ 설계 챌린지"
+
+
+def reset_challenge() -> None:
+    ss.ch = {"specs": {lv: list(LEVELS[lv]["start"]) for lv in LEVELS},
+             "fails": {lv: 0 for lv in LEVELS}, "cleared": {lv: False for lv in (1, 2, 3, 4)},
+             "judged": {lv: None for lv in LEVELS}, "lv4": {"prediction": None, "revealed": False},
+             "ver": ss.get("ch", {}).get("ver", 0) + 1}
+    ss.ch_level = 1  # 처음부터 다시 하면 Lv.1 로
+
+
+def ch_key(name: str) -> str:
+    return f"ch_{name}_{ss.ch['ver']}"
+
+
+def ch_set_thickness(level: int, index: int) -> None:
+    key, _ = ss.ch["specs"][level][index]
+    ss.ch["specs"][level][index] = (key, round(ss[ch_key(f"d{level}_{index}")], 3))
+    ss.ch["judged"][level] = None
+
+
+def ch_set_material(level: int, index: int) -> None:
+    _, d = ss.ch["specs"][level][index]
+    ss.ch["specs"][level][index] = (ss[ch_key(f"m{level}_{index}")], d)
+    ss.ch["judged"][level] = None
+
+
+def ch_edit_layers(action: str, index: int = -1) -> None:
+    """Lv.3 층 추가/삭제/이동. 위젯을 새로 그리도록 ver 를 올린다."""
+    spec = ss.ch["specs"][3]
+    if action == "add":
+        spec.append((ss[ch_key("new3")], 0.05))
+    elif action == "delete" and len(spec) > 1:
+        spec.pop(index)
+    elif action in ("up", "down"):
+        j = index - 1 if action == "up" else index + 1
+        if 0 <= j < len(spec):
+            spec[index], spec[j] = spec[j], spec[index]
+    ss.ch["judged"][3] = None
+    ss.ch["ver"] += 1
+
+
+def ch_judge(level: int) -> None:
+    passed = evaluate(level, ss.ch["specs"][level])["passed"]
+    ss.ch["judged"][level] = passed
+    if passed:
+        ss.ch["cleared"][level] = True
+    else:
+        ss.ch["fails"][level] += 1
+
+
+def ch_reveal_lv4() -> None:
+    ss.ch["lv4"]["prediction"] = LV4_CHOICES.index(ss[ch_key("lv4_pred")])
+    ss.ch["lv4"]["revealed"] = True
+    ss.ch["cleared"][4] = True
+    set_view_mode(MODE_TEMPERATURE)  # 공개하는 순간 두 3D 모형을 온도 보기로
+
+
+# 3D 보기 모드: 학생이 고른 값(view_mode)은 레벨 이동·두께 변경에도 유지된다.
+# 위젯 키에 버전을 붙여, 코드가 모드를 바꿀 때(Lv.4 공개) 새 위젯이 그 값으로 그려지게 한다.
+if "view_mode" not in ss:
+    ss.view_mode, ss.view_ver = MODE_MATERIAL, 0
+
+
+def set_view_mode(mode: str) -> None:
+    ss.view_mode = mode
+    ss.view_ver += 1
+
+
+def on_view_toggle(key: str) -> None:
+    if ss.get(key):
+        ss.view_mode = ss[key]
+
+
+def load_condition_air(layers: list[tuple[str, float]], T_oa: float, T_ia: float, h_to: float, h_ti: float) -> None:
+    load_condition(layers, T_oa, T_ia)
+    ss.mode = AIR_MODE
+    ss.cond.update({"T_oa": T_oa, "T_ia": T_ia, "h_to": h_to, "h_ti": h_ti})
+
+
+def ask_ai_design(level: int) -> None:
+    spec = ss.ch["specs"][level]
+    ev = evaluate(level, spec)
+    load_condition_air(spec, CH_T_OA, CH_T_IA, CH_H_TO, CH_H_TI)  # 튜터가 같은 계산 결과(JSON)를 보도록
+    ss.pending_question = (
+        "[설계 챌린지] 내 벽 설계를 평가해줘. 정답 조합이나 두께를 알려주지 말고, 내 설계 판단이 어떤지 짚은 뒤 "
+        "다음에 무엇을 고민해 보면 좋을지 질문 1~2개로 이끌어줘.\n"
+        + json.dumps(design_summary(level, spec, ev), ensure_ascii=False, indent=1))
+    ss.main_tab = TAB_TUTOR
+
+
+if "ch" not in ss:
+    reset_challenge()
+
+
 with st.sidebar:
     st.header("조건 설정")
     st.radio("계산 모드", [SURFACE_MODE, AIR_MODE], key="mode")
@@ -358,7 +458,8 @@ with st.sidebar:
     st.checkbox("🎬 시연 모드", key="demo_mode", on_change=lambda: reset_quiz(),
                 help="개념 점검의 계산 4번(경계 온도)이 항상 같은 문제로 나옵니다 (켜고 끄면 퀴즈가 새로 시작됩니다).")
 
-tab_lab, tab_tutor, tab_quiz = st.tabs([TAB_LAB, TAB_TUTOR, TAB_QUIZ], key="main_tab", on_change="rerun")
+tab_lab, tab_tutor, tab_quiz, tab_challenge = st.tabs([TAB_LAB, TAB_TUTOR, TAB_QUIZ, TAB_CHALLENGE],
+                                                       key="main_tab", on_change="rerun")
 
 if ss.get("lab_notice"):
     tab_lab.success(ss.pop("lab_notice"))
@@ -553,6 +654,11 @@ def fmt_answer(v: float) -> str:
     return f"{v:.4f}" if abs(v) < 1 else f"{v:.3f}" if abs(v) < 100 else f"{v:.1f}"
 
 
+def score_text() -> str:
+    answers = list(ss.quiz["num_answers"].values()) + list(ss.quiz["mcq_answers"].values())
+    return f"현재 점수 {sum(a['correct'] for a in answers)} / {len(answers)}"
+
+
 def render_numeric(i: int, p: dict, ai_on: bool) -> None:
     rnd = ss.quiz["round"]
     result = ss.quiz["num_answers"].get(i)
@@ -575,6 +681,7 @@ def render_numeric(i: int, p: dict, ai_on: bool) -> None:
         else:
             given = "입력 없음" if result["value"] is None else f"{result['value']:.4g}"
             st.error(f"❌ 오답 — 입력 {given}, 정답 {fmt_answer(p['answer'])} {p['unit']} (허용 오차 ±2%)")
+        st.caption(score_text())
         with st.expander("풀이 보기", expanded=not result["correct"]):
             for step in p["steps"]:
                 st.markdown(f"- {step}")
@@ -606,7 +713,7 @@ def render_mcq(n: int, q: dict, ai_on: bool) -> None:
         else:
             st.error(f"❌ 오답 — 고른 답이 틀린 이유: {q['why'][result['choice']]}")
             st.info(f"정답: **{right}**  \n{q['why'][q['answer']]}")
-        st.caption(f"출처: {q['source']}  ·  주제: {q['topic']}")
+        st.caption(f"출처: {q['source']}  ·  주제: {q['topic']}  ·  {score_text()}")
         if ai_on:
             mine = q["options"][result["choice"]]
             ask_q = (f"[개념 점검: {q['topic']}] 문제: {q['question']} 내가 고른 답: '{mine}', 정답: '{right}'. "
@@ -636,3 +743,200 @@ with tab_quiz:
     st.subheader("② 개념 문제 (자주 하는 오개념)")
     for n, q in enumerate(CONCEPT_QUESTIONS, start=1):
         render_mcq(n, q, ai_on)
+
+
+# ---------------------------------------------------------------- 설계 챌린지 탭
+EXTRA_CHALLENGE = {
+    1: "💪 추가 도전: 더 얇게 통과할 수 있을까요? 단열재를 1 cm 씩 줄여 보며 통과선이 몇 cm 인지 찾아보세요.",
+    2: "💪 추가 도전: 다른 단열재로도 통과할 수 있나요? k = 0.04 단열재로는 왜 안 되는지 두께 조건과 함께 설명해 보세요.",
+    3: "💪 추가 도전: 총 두께를 더 줄일 수 있을까요? 단열재를 구조층 안쪽(실내 쪽)으로 옮기면 어떤 조건이 깨지는지도 확인해 보세요.",
+}
+
+
+def render_checks(ev: dict) -> None:
+    for c in ev["checks"]:
+        mark = "✅" if c["passed"] else "⬜"
+        st.progress(c["progress"], text=f"{mark} **{c['label']}** — {c['text']}")
+
+
+def render_feedback(level: int, ev: dict, ai_on: bool) -> None:
+    judged = ss.ch["judged"][level]
+    b1, b2 = st.columns([1, 1])
+    b1.button("🧪 판정하기", key=ch_key(f"judge{level}"), on_click=ch_judge, args=(level,), type="primary",
+              width="stretch")
+    if ai_on:
+        b2.button("🤖 AI에게 내 설계 평가받기", key=ch_key(f"ai{level}"), on_click=ask_ai_design, args=(level,),
+                  width="stretch", help="현재 설계와 목표를 AI 튜터에게 보내고, 정답 대신 설계 판단을 질문으로 이끌어 줍니다.")
+    if judged is True:
+        st.success(f"🎉 {LEVELS[level]['title']} 클리어! 모든 조건을 만족했습니다 "
+                   f"(U = {ev['res']['U']:.3f} W/(m²K), 총 두께 {ev['res']['total_thickness']:.3f} m).")
+        st.info(EXTRA_CHALLENGE[level])
+    elif judged is False:
+        failed = [c["label"] for c in ev["checks"] if not c["passed"]]
+        st.error(f"아직 통과하지 못했습니다 — 미통과 조건: {', '.join(failed)}  (실패 {ss.ch['fails'][level]}회)")
+    if ss.ch["fails"][level] >= 3 and judged is not True:
+        h = hints(ss.ch["specs"][level])
+        with st.expander("💡 힌트 (3번 이상 실패해서 열렸어요)", expanded=True):
+            st.markdown("**각 층이 전체 저항에서 차지하는 비율** — 저항이 큰 층이 U 를 결정합니다 (02강 p.20, p.57).")
+            st.dataframe([{"요소": s["name"], "R [m²K/W]": round(s["R"], 3), "비율 [%]": round(s["share_pct"], 1)}
+                          for s in h["shares"]], hide_index=True, width="stretch")
+            st.markdown(f"지금 벽에서 **1 cm 늘렸을 때 U 가 가장 많이 줄어드는 층은 '{h['best_name']}'**"
+                        f"(k = {h['best_k']:g}) 입니다 (U {h['best_drop']:.3f} 감소). "
+                        "왜 그 층일까요? R = d/k 를 떠올려 보세요.")
+            if any(not c["passed"] and c["label"] == "구조층 최저 온도" for c in ev["checks"]):
+                st.markdown("구조층 온도 조건이 남았다면 그래프에서 **구조층이 따뜻한 쪽(실내)과 차가운 쪽(실외) 중 어디에 "
+                            "놓여 있는지** 보세요. 층의 순서를 바꿔 보면 어떻게 될까요?")
+
+
+def render_view_toggle() -> str:
+    key = f"view3d_{ss.view_ver}"
+    st.segmented_control("3D 보기", MODES, default=ss.view_mode, required=True, key=key,
+                         on_change=on_view_toggle, args=(key,), label_visibility="collapsed")
+    return ss.view_mode
+
+
+def render_3d(res: dict, key: str, mode: str, note: bool = True, height: int = 400) -> None:
+    """calc 결과로 그린 3D 벽체 (두께 비율 실제, 1 m × 1 m).
+    uirevision 덕분에 그림이 그대로인 재실행(판정하기 등)에서는 돌려 놓은 시점이 유지된다.
+    단, 그림 자체가 바뀌면(보기 모드·두께 변경) Streamlit 이 3D 요소를 새로 그려 기본 시점으로 돌아간다."""
+    fig = wall_figure(res, (CH_T_OA, CH_T_IA), mode=mode, height=height)
+    fig.update_layout(uirevision="wall3d")
+    st.plotly_chart(fig, width="stretch", key=ch_key(key))
+    if note:
+        what = "색 = 재료 (아래 범례)" if mode == MODE_MATERIAL else "색 = 경계 온도"
+        st.caption(f"🧊 3D 벽체 (1 m × 1 m, 두께는 실제 비율, {what}). {NOTE} "
+                   "마우스로 돌려 보고, 층에 올리면 정보가 보입니다.")
+
+
+def render_design_view(level: int, ev: dict) -> None:
+    g, s = st.columns([3, 2])
+    with g:
+        st.plotly_chart(build_figure(ev["res"]), width="stretch", key=ch_key(f"fig{level}"))
+        st.caption("겨울 조건 T_oa = -10 °C, T_ia = 20 °C, h_to = 25, h_ti = 7.7 W/(m²K) (대표값). "
+                   "파란 구간은 표면저항 표시용 폭입니다.")
+        mode = render_view_toggle()
+        render_3d(ev["res"], f"3d{level}", mode)
+    with s:
+        st.markdown("**목표 조건**")
+        render_checks(ev)
+        m1, m2 = st.columns(2)
+        m1.metric("U-value [W/(m²K)]", f"{ev['res']['U']:.3f}")
+        m2.metric("총 두께 [m]", f"{ev['res']['total_thickness']:.3f}")
+        st.caption(f"참고: 겨울 실내 표면 온도 T_is = {ev['inner_surface_temp']:.2f} °C. 1차원 정상상태에서 T_is 는 "
+                   "U 로만 정해집니다 (T_is = T_ia − U·ΔT/h_ti). 층 순서를 바꿔도 같습니다.")
+
+
+def render_level_fixed(level: int) -> None:
+    spec = ss.ch["specs"][level]
+    idx = LEVELS[level]["edit_index"]
+    st.markdown(f"**목표:** {LEVELS[level]['goal']}")
+    cols = st.columns(len(spec))
+    for i, (key, d) in enumerate(spec):
+        with cols[i]:
+            with st.container(border=True):
+                st.caption(f"{i + 1}층 (실외 → 실내)")
+                if i != idx:
+                    st.markdown(f"**{MATERIAL_PRESETS[key]['name']}** k = {MATERIAL_PRESETS[key]['k']:g}")
+                    st.markdown(f"d = {d:g} m  🔒")
+                    continue
+                if level == 2:
+                    st.selectbox("단열재 종류", INSULATIONS, index=INSULATIONS.index(key), key=ch_key(f"m{level}_{i}"),
+                                 on_change=ch_set_material, args=(level, i))
+                else:
+                    st.markdown(f"**{MATERIAL_PRESETS[key]['name']}** k = {MATERIAL_PRESETS[key]['k']:g}")
+                st.slider("두께 d [m]", 0.01, 0.30, value=float(d), step=0.01, key=ch_key(f"d{level}_{i}"),
+                          on_change=ch_set_thickness, args=(level, i), format="%.2f")
+
+
+def render_level_free() -> None:
+    spec = ss.ch["specs"][3]
+    st.markdown(f"**목표:** {LEVELS[3]['goal']}")
+    st.info("**왜 '구조층 최저 온도 ≥ 0 °C' 인가요?** 구조체가 0 °C 아래로 내려가면 내부 수분이 얼어 손상될 위험이 "
+            "커집니다. 외단열은 구조체를 실내 쪽 온도로 따뜻하게 유지합니다 (열교 해결책으로서의 외부 단열: 02강 p.73, "
+            "습기에 의한 기계적 응력: 03강).  \n"
+            "_학습용으로 단순화한 설계 기준이며, 실제 설계 법규 기준은 아닙니다._")
+    for i, (key, d) in enumerate(spec):
+        c = st.columns([0.4, 3, 2, 0.5, 0.5, 0.5], vertical_alignment="center")
+        c[0].markdown(f"**{i + 1}**")
+        c[1].selectbox("재료", LV3_PRESETS, index=LV3_PRESETS.index(key), key=ch_key(f"m3_{i}"),
+                       on_change=ch_set_material, args=(3, i), label_visibility="collapsed")
+        c[2].number_input("두께 d [m]", 0.005, 0.50, value=float(d), step=0.01, key=ch_key(f"d3_{i}"),
+                          on_change=ch_set_thickness, args=(3, i), format="%.3f", label_visibility="collapsed")
+        c[3].button("↑", key=ch_key(f"up3_{i}"), on_click=ch_edit_layers, args=("up", i), disabled=i == 0)
+        c[4].button("↓", key=ch_key(f"dn3_{i}"), on_click=ch_edit_layers, args=("down", i),
+                    disabled=i == len(spec) - 1)
+        c[5].button("✕", key=ch_key(f"del3_{i}"), on_click=ch_edit_layers, args=("delete", i),
+                    disabled=len(spec) == 1)
+    a1, a2 = st.columns([3, 1])
+    a1.selectbox("추가할 재료", LV3_PRESETS, key=ch_key("new3"), label_visibility="collapsed")
+    a2.button("➕ 층 추가 (실내 쪽 끝)", key=ch_key("add3"), on_click=ch_edit_layers, args=("add",), width="stretch")
+    st.caption("1번 층이 실외 쪽입니다. 두께는 0.005–0.50 m 범위에서 입력하세요.")
+
+
+def render_lv4() -> None:
+    st.markdown("**발견 레벨:** 아래 벽(콘크리트 | 단열재 | 석고보드, 내단열)에서 **콘크리트와 단열재의 순서를 바꾸면** "
+                "(단열재 | 콘크리트 | 석고보드, 외단열) U-value 는 어떻게 될까요? 먼저 예측하세요.")
+    r = lv4_results()
+    lv4 = ss.ch["lv4"]
+    if not lv4["revealed"]:
+        g, v = st.columns([3, 2])
+        g.plotly_chart(build_figure(r["inner"]), width="stretch", key=ch_key("lv4_inner_only"))
+        with v:
+            render_3d(r["inner"], "lv4_pre_3d", MODE_MATERIAL, note=False, height=360)
+            st.caption("🧱 결과 공개 전에는 재료 보기로만 보여 줍니다. 순서를 바꾸면 무엇이 달라질지 먼저 예측해 보세요.")
+        st.radio("예측", LV4_CHOICES, index=None, key=ch_key("lv4_pred"), label_visibility="collapsed")
+        st.button("🔄 예측 확정하고 순서 바꿔보기", key=ch_key("lv4_btn"), on_click=ch_reveal_lv4, type="primary",
+                  disabled=ss.get(ch_key("lv4_pred")) is None)
+        return
+    right = lv4["prediction"] == LV4_ANSWER
+    (st.success if right else st.warning)(
+        f"{'✅ 예측 성공!' if right else '🤔 예측과 달랐어요.'} 내 예측: \"{LV4_CHOICES[lv4['prediction']]}\" → "
+        f"정답: **{LV4_CHOICES[LV4_ANSWER]}**")
+    c1, c2 = st.columns(2)
+    for col, res, title, smin in ((c1, r["inner"], "내단열: 콘크리트 | 단열재 | 석고보드", r["inner_struct"]),
+                                  (c2, r["outer"], "외단열: 단열재 | 콘크리트 | 석고보드", r["outer_struct"])):
+        with col:
+            st.markdown(f"**{title}**")
+            st.plotly_chart(build_figure(res), width="stretch", key=ch_key(f"lv4_{title[:3]}"))
+            m1, m2 = st.columns(2)
+            m1.metric("U-value [W/(m²K)]", f"{res['U']:.3f}")
+            m2.metric("콘크리트 최저 온도 [°C]", f"{smin:.1f}")
+    st.markdown("**3D 모형 비교**")
+    mode = render_view_toggle()
+    d1, d2 = st.columns(2)
+    for col, res, tag in ((d1, r["inner"], "inner"), (d2, r["outer"], "outer")):
+        with col:
+            render_3d(res, f"lv4_3d_{tag}", mode, note=False, height=380)
+    same_range = " 두 모형은 같은 색 범위(-10 ~ 20 °C)를 씁니다." if mode == MODE_TEMPERATURE else ""
+    st.caption(f"3D 모형 (왼쪽 내단열, 오른쪽 외단열): {NOTE}{same_range}")
+    st.info("**해설** — 정상상태 1차원 열전달에서 직렬 저항은 더하기만 하므로(R_t = ΣR, 02강 p.20, p.57) "
+            "순서를 바꿔도 R_t 와 U-value 는 같습니다. 하지만 **벽 내부 온도 분포는 달라집니다.** "
+            f"외단열은 콘크리트가 따뜻한 쪽에 있어 최저 {r['outer_struct']:.1f} °C 로 유지되고, "
+            f"내단열은 콘크리트가 외기 쪽에서 최저 {r['inner_struct']:.1f} °C 까지 내려갑니다. "
+            "이 차이는 내부 결로와 열용량(축열) 문제로 이어지는데, 이는 03강(습기 이동) 범위입니다.")
+
+
+with tab_challenge:
+    ai_on = cfg is not None
+    status = st.columns(5, vertical_alignment="center")
+    for lv, col in zip((1, 2, 3, 4), status):
+        col.metric(f"Lv.{lv}", "✅ 클리어" if ss.ch["cleared"][lv] else "⬜ 도전 중")
+    status[4].button("↺ 처음부터 다시 하기", on_click=reset_challenge, width="stretch")
+
+    # 보기 이름은 고정 (클리어 표시를 이름에 붙이면 위젯이 바뀐 것으로 처리돼 선택이 Lv.1 로 초기화됨).
+    # 클리어 여부는 위 상태 줄에서 보여 준다.
+    level = st.radio("레벨 선택", [1, 2, 3, 4], horizontal=True, key="ch_level",
+                     format_func=lambda lv: LEVELS[lv]["title"] if lv in LEVELS else "Lv.4 순서 바꾸기 (발견)")
+    st.caption("공기온도 모드 기준 (h_to = 25, h_ti = 7.7 W/(m²K) 대표값). 판정은 겨울 -10 / 20 °C 조건. "
+               "모든 수치는 벽체 실험실과 같은 계산 엔진(calc.py)으로 계산합니다.")
+    st.divider()
+    if level == 4:
+        render_lv4()
+    else:
+        if level == 3:
+            render_level_free()
+        else:
+            render_level_fixed(level)
+        ev = evaluate(level, ss.ch["specs"][level])
+        render_design_view(level, ev)
+        render_feedback(level, ev, ai_on)

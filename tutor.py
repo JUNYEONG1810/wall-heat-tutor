@@ -83,6 +83,7 @@ JSON 에 없는 수치가 필요하면 벽체 실험실에서 조건을 바꿔 �
   (예: "정상상태에서 콘크리트층을 지나는 열류와 단열재층을 지나는 열류는 어떤 관계일까요?")
 - 학생이 "답 보여줘", "풀이 보여줘" 처럼 명시적으로 요청하면 그때 단계별 풀이를 보여준다.
 - "그래프를 설명해줘" 같은 설명 요청이나 개념 질문에는 바로 설명한다.
+  그래프 설명은 먼저 한 문장으로 총 열저항 R_t, 열류 q_t 의 크기와 방향을 요약한 뒤 층별 온도 변화를 설명한다.
 - 전기회로 비유를 적극 활용한다: 온도차 = 전압, 열류 = 전류, 열저항 = 저항 (02강 p.18).
 - 한국어로, 짧고 명확하게 답한다 (보통 3~8문장). 수식은 $...$ 로 쓴다.
 
@@ -191,7 +192,10 @@ def _ask_gemini(cfg: TutorConfig, system: str, messages: list[dict]) -> str:
         if e.code == 404:
             raise TutorError(f"모델 '{cfg.model}' 을(를) 찾을 수 없습니다 (.env 의 GEMINI_MODEL 확인).") from e
         if e.code == 429:
-            raise TutorError("무료 등급 요청 한도를 초과했습니다. 1분쯤 뒤에 다시 시도해 주세요.") from e
+            if "per day" in str(e).lower() or "PerDay" in str(e):
+                raise TutorError(f"오늘 '{cfg.model}' 모델의 무료 요청 한도(하루 횟수)를 모두 썼습니다. 내일 다시 시도하거나, "
+                                 ".env 의 GEMINI_MODEL 을 다른 무료 모델(예: gemini-3.5-flash-lite)로 바꿔 보세요.") from e
+            raise TutorError("무료 등급의 분당 요청 한도를 초과했습니다. 1분쯤 뒤에 다시 시도해 주세요.") from e
         raise TutorError(f"Gemini API 요청 오류 ({e.code}).") from e
     except errors.ServerError as e:
         if e.code in (503, 504):
