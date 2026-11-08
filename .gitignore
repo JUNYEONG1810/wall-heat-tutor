@@ -1,0 +1,21 @@
+# 비밀 정보 — 절대 커밋하지 않음
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# OS / 편집기
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 강의자료 저작권: 강의 정리본은 공개 저장소에 포함하지 않음 (본인 자료를 data/ 에 넣어 사용)
+data/건축환경조절_정리본.md
