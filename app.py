@@ -16,14 +16,14 @@ from challenge import (H_TI as CH_H_TI, H_TO as CH_H_TO, INSULATIONS, LEVELS, LV
                        T_IA as CH_T_IA, T_OA as CH_T_OA, design_summary, evaluate, hints, lv4_results)
 from materials import CUSTOM, MATERIAL_PRESETS, TEXTBOOK_EXAMPLE, tutor_reference
 from quiz import CONCEPT_QUESTIONS, is_correct, make_round
+from viz2d import build_figure, flow_text
 from viz3d import MODE_MATERIAL, MODE_TEMPERATURE, MODES, NOTE, wall_figure
-from tutor import TutorError, ask, calc_context, load_config
+from tutor import TutorError, ask, calc_context, load_config, make_request, request_parts
 
 st.set_page_config(page_title="다층벽 열전달 AI 튜터", page_icon="🧱", layout="wide")
 
 SURFACE_MODE = "표면온도 모드 (T_os, T_is)"
 AIR_MODE = "공기온도 모드 (T_oa, T_ia, U-value)"
-LAYER_COLORS = ["#d9d9d9", "#ffe08a", "#d9b38c", "#f4a6a6", "#b5d99c", "#a8c8f0", "#d7b5f0", "#f7c59f"]
 D_MIN, D_MAX = 0.001, 1.0
 
 ss = st.session_state
@@ -126,78 +126,6 @@ def num(v: float, digits: int = 2) -> str:
     return f"({s})" if v < 0 else s
 
 
-def flow_text(res: dict) -> str:
-    if res["q_abs"] < 1e-12:
-        return "열 흐름 없음"
-    return "열 흐름: 실외 → 실내" if res["q_t"] > 0 else "열 흐름: 실내 → 실외"
-
-
-# ---------------------------------------------------------------- 그래프
-def build_figure(res: dict) -> go.Figure:
-    fig = go.Figure()
-    L = res["total_thickness"]
-    air = res["mode"] == "air"
-    a = 0.12 * L if air else 0.0  # 공기 구간 표시 폭 (실제 두께 아님)
-
-    layers = [e for e in res["elements"] if e["kind"] == "layer"]
-    for i, e in enumerate(layers):
-        fig.add_vrect(x0=e["x_start"], x1=e["x_end"], fillcolor=LAYER_COLORS[i % len(LAYER_COLORS)],
-                      opacity=0.55, line_width=0.5, layer="below")
-        fig.add_annotation(x=(e["x_start"] + e["x_end"]) / 2, y=0, yref="paper", yanchor="bottom",
-                           text=f"{e['name']}<br>R={e['R']:.3f}", showarrow=False, font=dict(size=11))
-
-    b = res["boundaries"]
-    if air:
-        for x0, x1 in ((-a, 0), (L, L + a)):
-            fig.add_vrect(x0=x0, x1=x1, fillcolor="#e8f1fb", opacity=0.6, line_width=0, layer="below")
-        # 외기 -> 외표면, 내표면 -> 실내공기 (표면저항 구간)
-        fig.add_trace(go.Scatter(x=[-a, 0], y=[b[0]["T"], b[1]["T"]], mode="lines+markers",
-                                 line=dict(color="#4a90d9", dash="dot", width=2), name="표면저항 구간"))
-        fig.add_trace(go.Scatter(x=[L, L + a], y=[b[-2]["T"], b[-1]["T"]], mode="lines+markers",
-                                 line=dict(color="#4a90d9", dash="dot", width=2), showlegend=False))
-        wall_pts = b[1:-1]
-        for x_air, bt_air, bt_wall, name in ((-a, b[0], b[1], "외기"), (L + a, b[-1], b[-2], "실내 공기")):
-            fig.add_annotation(x=x_air, y=bt_air["T"], text=f"{tex_plain(bt_air['symbol'])}<br>{bt_air['T']:.1f}°C",
-                               showarrow=False, yshift=18, font=dict(color="#2a6ab0"))
-            jump = abs(bt_wall["T"] - bt_air["T"])
-            fig.add_annotation(x=(x_air + (0 if x_air < 0 else L)) / 2, y=(bt_air["T"] + bt_wall["T"]) / 2,
-                               text=f"표면저항<br>ΔT {jump:.2f}°C", showarrow=False, xshift=0, yshift=-22,
-                               font=dict(size=10, color="#2a6ab0"))
-    else:
-        wall_pts = b
-
-    fig.add_trace(go.Scatter(
-        x=[p["x"] for p in wall_pts], y=[p["T"] for p in wall_pts], mode="lines+markers+text",
-        text=[f"{tex_plain(p['symbol'])} {p['T']:.1f}°C" for p in wall_pts], textposition=["top right"] + ["top center"] * (len(wall_pts) - 2) + ["top left"],
-        line=dict(color="#c0392b", width=3), marker=dict(size=9), name="벽체 내부 온도"))
-
-    temps = [p["T"] for p in b]
-    lo, hi = min(temps), max(temps)
-    span = max(hi - lo, 1.0)
-    y_top = hi + 0.35 * span
-    fig.update_yaxes(range=[lo - 0.25 * span, hi + 0.5 * span], title="온도 [°C]")
-    fig.update_xaxes(range=[-a - 0.04 * L, L + a + 0.04 * L], title="위치 x [m]  (0 = 외측)")
-
-    # 열 흐름 화살표 (고온측 -> 저온측)
-    if res["q_abs"] > 1e-12:
-        x_hot, x_cold = (-a, L + a) if res["q_t"] > 0 else (L + a, -a)
-        fig.add_annotation(x=x_cold, y=y_top, ax=x_hot, ay=y_top, xref="x", yref="y", axref="x", ayref="y",
-                           showarrow=True, arrowhead=3, arrowsize=1.6, arrowwidth=3, arrowcolor="#e67e22", text="")
-    fig.update_layout(title=dict(text=f"<b>{flow_text(res)}</b>  (|q_t| = {res['q_abs']:.2f} W/m²)",
-                                 x=0.5, xanchor="center", font=dict(size=15, color="#d35400")))
-    fig.add_annotation(x=0, y=1, xref="paper", yref="paper", text="◀ 실외 측", showarrow=False,
-                       xanchor="left", yanchor="bottom", font=dict(size=12))
-    fig.add_annotation(x=1, y=1, xref="paper", yref="paper", text="실내 측 ▶", showarrow=False,
-                       xanchor="right", yanchor="bottom", font=dict(size=12))
-    fig.update_layout(height=480, margin=dict(l=10, r=10, t=70, b=10),
-                      legend=dict(orientation="h", y=-0.18), plot_bgcolor="white")
-    return fig
-
-
-def tex_plain(symbol: str) -> str:
-    return symbol  # 그래프 라벨은 'T_os' 그대로 (Plotly 텍스트)
-
-
 # ---------------------------------------------------------------- 풀이·인사이트
 def circuit_text(res: dict) -> str:
     b = res["boundaries"]
@@ -296,6 +224,18 @@ st.caption("건축환경조절(ARC2041) 02강 · 정상상태 다층벽 열전�
 TAB_LAB, TAB_TUTOR, TAB_QUIZ = "🔬 벽체 실험실", "💬 AI 튜터에게 질문", "✅ 개념 점검"
 
 
+def go_tab(name: str) -> None:
+    """코드에서 탭을 바꿀 때: 탭 위젯을 새로 만들어(버전 키) 그 탭으로 연다.
+    키를 그대로 두고 값만 바꾸면 브라우저 쪽 탭 상태가 갱신되지 않아,
+    다음 조작에서 이전 탭으로 되돌아가는 문제가 있었다."""
+    ss.tab_target = name
+    ss.tab_ver += 1
+
+
+if "tab_ver" not in ss:
+    ss.tab_ver, ss.tab_target = 0, TAB_LAB
+
+
 def reset_quiz() -> None:
     ss.quiz = {"round": ss.get("quiz", {}).get("round", 0) + 1,
                "numeric": make_round(random.randrange(1_000_000), demo=ss.get("demo_mode", False)),
@@ -320,17 +260,18 @@ def grade_mcq(qid: str) -> None:
 def open_in_lab(i: int) -> None:
     p = ss.quiz["numeric"][i]
     load_condition(p["layers"], p["T_os"], p["T_is"])
-    ss.main_tab = TAB_LAB
+    go_tab(TAB_LAB)
     ss.lab_notice = (f"✅ 개념 점검 계산 {i + 1}번 조건을 불러왔습니다 "
                      f"(T_os = {p['T_os']:g} °C, T_is = {p['T_is']:g} °C). 그래프와 단계별 풀이로 확인해 보세요.")
 
 
-def ask_ai_about(question: str, numeric_index: int | None = None) -> None:
+def ask_ai_about(display: str, payload: str, numeric_index: int | None = None) -> None:
+    """채팅 말풍선·대화 기록에는 짧은 문구(display), AI 에게는 문제 전체(payload)를 보낸다."""
     if numeric_index is not None:  # 계산 문제는 실험실에 조건을 넣어 튜터가 같은 계산 결과를 보게 한다
         p = ss.quiz["numeric"][numeric_index]
         load_condition(p["layers"], p["T_os"], p["T_is"])
-    ss.pending_question = question
-    ss.main_tab = TAB_TUTOR
+    ss.pending_question = make_request(display, payload)
+    go_tab(TAB_TUTOR)
 
 
 if "quiz" not in ss:
@@ -422,11 +363,11 @@ def ask_ai_design(level: int) -> None:
     spec = ss.ch["specs"][level]
     ev = evaluate(level, spec)
     load_condition_air(spec, CH_T_OA, CH_T_IA, CH_H_TO, CH_H_TI)  # 튜터가 같은 계산 결과(JSON)를 보도록
-    ss.pending_question = (
-        "[설계 챌린지] 내 벽 설계를 평가해줘. 정답 조합이나 두께를 알려주지 말고, 내 설계 판단이 어떤지 짚은 뒤 "
-        "다음에 무엇을 고민해 보면 좋을지 질문 1~2개로 이끌어줘.\n"
-        + json.dumps(design_summary(level, spec, ev), ensure_ascii=False, indent=1))
-    ss.main_tab = TAB_TUTOR
+    payload = ("[설계 챌린지] 내 벽 설계를 평가해줘. 정답 조합이나 두께를 알려주지 말고, 내 설계 판단이 어떤지 짚은 뒤 "
+               "다음에 무엇을 고민해 보면 좋을지 질문 1~2개로 이끌어줘.\n"
+               + json.dumps(design_summary(level, spec, ev), ensure_ascii=False, indent=1))
+    ss.pending_question = make_request(f"📐 Lv.{level} 내 설계를 평가해줘", payload)
+    go_tab(TAB_TUTOR)
 
 
 if "ch" not in ss:
@@ -459,7 +400,8 @@ with st.sidebar:
                 help="개념 점검의 계산 4번(경계 온도)이 항상 같은 문제로 나옵니다 (켜고 끄면 퀴즈가 새로 시작됩니다).")
 
 tab_lab, tab_tutor, tab_quiz, tab_challenge = st.tabs([TAB_LAB, TAB_TUTOR, TAB_QUIZ, TAB_CHALLENGE],
-                                                       key="main_tab", on_change="rerun")
+                                                       key=f"main_tab_{ss.tab_ver}", default=ss.tab_target,
+                                                       on_change="rerun")
 
 if ss.get("lab_notice"):
     tab_lab.success(ss.pop("lab_notice"))
@@ -630,7 +572,8 @@ with tab_tutor:
                     st.markdown(m["content"])
 
         typed = st.chat_input("02강 열전달에 대해 질문해 보세요 (예: 단열재 두께를 두 배로 하면?)")
-        question = typed or ss.pop("pending_question", None)
+        pending = ss.pop("pending_question", None)
+        question, payload = (typed, typed) if typed else request_parts(pending) if pending else (None, None)
         if question:
             with chat_box:
                 with st.chat_message("user"):
@@ -641,7 +584,7 @@ with tab_tutor:
                     with st.chat_message("assistant"):
                         with st.spinner("튜터가 생각하는 중..."):
                             try:
-                                answer = ask(cfg, ss.chat, question, calc_context(ss.last_inputs, ss.last_result))
+                                answer = ask(cfg, ss.chat, payload, calc_context(ss.last_inputs, ss.last_result))
                             except TutorError as err:
                                 answer = None
                                 st.error(str(err))
@@ -692,8 +635,8 @@ def render_numeric(i: int, p: dict, ai_on: bool) -> None:
             mine = "입력 없음" if result["value"] is None else f"{result['value']:.4g}"
             q = (f"[개념 점검 계산 {i + 1}번] {p['question']} 내 답은 {mine} {p['unit']}, "
                  f"정답은 {fmt_answer(p['answer'])} {p['unit']}였어. 어디서 틀렸는지(또는 왜 맞는지) 짚어줘.")
-            b2.button("🤖 AI에게 더 물어보기", key=f"ai_n_{rnd}_{i}", on_click=ask_ai_about, args=(q, i),
-                      width="stretch")
+            b2.button("🤖 AI에게 더 물어보기", key=f"ai_n_{rnd}_{i}", on_click=ask_ai_about,
+                      args=(f"🔢 계산 {i + 1}번 문제를 더 설명해줘", q, i), width="stretch")
 
 
 def render_mcq(n: int, q: dict, ai_on: bool) -> None:
@@ -718,7 +661,8 @@ def render_mcq(n: int, q: dict, ai_on: bool) -> None:
             mine = q["options"][result["choice"]]
             ask_q = (f"[개념 점검: {q['topic']}] 문제: {q['question']} 내가 고른 답: '{mine}', 정답: '{right}'. "
                      "이 개념을 다른 예로 한 번 더 설명해줘.")
-            st.button("🤖 AI에게 더 물어보기", key=f"ai_m_{rnd}_{q['id']}", on_click=ask_ai_about, args=(ask_q,))
+            st.button("🤖 AI에게 더 물어보기", key=f"ai_m_{rnd}_{q['id']}", on_click=ask_ai_about,
+                      args=(f"❓ 개념 {n}번({q['topic']})을 더 설명해줘", ask_q))
 
 
 with tab_quiz:

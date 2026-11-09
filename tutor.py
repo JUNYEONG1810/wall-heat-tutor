@@ -138,6 +138,18 @@ def calc_context(inputs: dict, res: dict) -> dict:
     }
 
 
+def make_request(display: str, payload: str) -> dict:
+    """버튼이 보내는 요청: 채팅 말풍선·대화 기록용 짧은 문구와 AI 에게 보낼 전체 내용을 분리."""
+    return {"display": display, "payload": payload}
+
+
+def request_parts(pending: str | dict) -> tuple[str, str]:
+    """(화면·기록용 문구, AI 전송용 내용). 바로가기 버튼처럼 문자열이면 둘이 같다."""
+    if isinstance(pending, dict):
+        return pending["display"], pending["payload"]
+    return pending, pending
+
+
 def build_messages(history: list[dict], question: str, context: dict) -> list[dict]:
     """[{role: user|assistant, content}] — 최근 MAX_TURNS 턴 + 이번 질문(계산 결과 JSON 포함)."""
     recent = history[-2 * MAX_TURNS:]

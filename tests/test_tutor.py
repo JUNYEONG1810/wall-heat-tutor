@@ -103,3 +103,12 @@ def test_partial_notes_use_found_sections(tmp_path):
     ref = tutor_reference(notes)
     assert ref.startswith("### 2.8 열저항") and "2.99" not in ref
     assert "<정리본>" in build_system_prompt(reference=ref)
+
+
+def test_request_display_and_payload_are_separate():
+    from tutor import make_request, request_parts
+    req = make_request("📐 Lv.3 내 설계를 평가해줘", '[설계 챌린지] ... {"레벨": "Lv.3"}')
+    display, payload = request_parts(req)
+    assert display == "📐 Lv.3 내 설계를 평가해줘" and "{" not in display
+    assert payload.startswith("[설계 챌린지]") and '"레벨"' in payload
+    assert request_parts("U-value가 뭐야?") == ("U-value가 뭐야?", "U-value가 뭐야?")   # 바로가기 버튼
