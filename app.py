@@ -112,6 +112,21 @@ def cond_input(label: str, name: str, **kwargs) -> None:
 
 
 # ---------------------------------------------------------------- 표시 도우미
+# 층 순서·삭제 버튼: 글자(↑ ↓ ✕) 대신 Streamlit 내장 Material 아이콘.
+# 좁은 칸에서 글자가 버튼 여백에 잘려 '>' ';' 처럼 보이던 문제를 막고, 클라우드·로컬 모두 같은 모양으로 보인다.
+LAYER_BUTTONS = {
+    "up": (":material/arrow_upward:", "위로 (실외 쪽으로) 이동"),
+    "down": (":material/arrow_downward:", "아래로 (실내 쪽으로) 이동"),
+    "delete": (":material/delete:", "이 층 삭제"),
+}
+
+
+def icon_button(container, kind: str, key: str, on_click, args: tuple, disabled: bool = False) -> None:
+    icon, tip = LAYER_BUTTONS[kind]
+    container.button("", key=key, icon=icon, help=tip, on_click=on_click, args=args, disabled=disabled,
+                     type="tertiary")
+
+
 def tex(symbol: str) -> str:
     """'T_os' -> 'T_{os}'"""
     if "_" not in symbol:
@@ -412,7 +427,7 @@ with tab_lab:
     top_r.button("📘 정리본 예제 불러오기 (p.29)", on_click=load_example, width="stretch")
 
     preset_keys = list(MATERIAL_PRESETS.keys())
-    hdr = st.columns([0.4, 2.6, 2.4, 1.1, 1.1, 0.9, 1.3])
+    hdr = st.columns([0.4, 2.5, 2.1, 1.1, 1.1, 1.0, 1.8])
     for col, label in zip(hdr, ["#", "재료", "두께 d [m]", "", "k [W/(m·K)]", "R", "순서 / 삭제"]):
         col.markdown(f"<small><b>{label}</b></small>", unsafe_allow_html=True)
 
@@ -425,7 +440,7 @@ with tab_lab:
         ss.setdefault(f"k_{lid}", layer["k"])
         ss.setdefault(f"name_{lid}", layer["name"])
 
-        c = st.columns([0.4, 2.6, 2.4, 1.1, 1.1, 0.9, 1.3], vertical_alignment="center")
+        c = st.columns([0.4, 2.5, 2.1, 1.1, 1.1, 1.0, 1.8], vertical_alignment="center")
         c[0].markdown(f"**{pos + 1}**")
         c[1].selectbox("재료", preset_keys, key=f"preset_{lid}", on_change=on_preset, args=(lid,),
                        label_visibility="collapsed")
@@ -444,11 +459,9 @@ with tab_lab:
                           disabled=layer["preset"] != CUSTOM)
         c[5].markdown(f"`{layer['d'] / layer['k']:.3f}`")
         b1, b2, b3 = c[6].columns(3)
-        b1.button("↑", key=f"up_{lid}", on_click=move_layer, args=(lid, -1), disabled=pos == 0)
-        b2.button("↓", key=f"down_{lid}", on_click=move_layer, args=(lid, 1),
-                  disabled=pos == len(ss.layer_ids) - 1)
-        b3.button("✕", key=f"del_{lid}", on_click=delete_layer, args=(lid,),
-                  disabled=len(ss.layer_ids) == 1)
+        icon_button(b1, "up", f"up_{lid}", move_layer, (lid, -1), disabled=pos == 0)
+        icon_button(b2, "down", f"down_{lid}", move_layer, (lid, 1), disabled=pos == len(ss.layer_ids) - 1)
+        icon_button(b3, "delete", f"del_{lid}", delete_layer, (lid,), disabled=len(ss.layer_ids) == 1)
 
     add_c1, add_c2 = st.columns([3, 1])
     new_preset = add_c1.selectbox("추가할 재료", preset_keys, key="new_preset", label_visibility="collapsed")
@@ -806,11 +819,9 @@ def render_level_free() -> None:
                        on_change=ch_set_material, args=(3, i), label_visibility="collapsed")
         c[2].number_input("두께 d [m]", 0.005, 0.50, value=float(d), step=0.01, key=ch_key(f"d3_{i}"),
                           on_change=ch_set_thickness, args=(3, i), format="%.3f", label_visibility="collapsed")
-        c[3].button("↑", key=ch_key(f"up3_{i}"), on_click=ch_edit_layers, args=("up", i), disabled=i == 0)
-        c[4].button("↓", key=ch_key(f"dn3_{i}"), on_click=ch_edit_layers, args=("down", i),
-                    disabled=i == len(spec) - 1)
-        c[5].button("✕", key=ch_key(f"del3_{i}"), on_click=ch_edit_layers, args=("delete", i),
-                    disabled=len(spec) == 1)
+        icon_button(c[3], "up", ch_key(f"up3_{i}"), ch_edit_layers, ("up", i), disabled=i == 0)
+        icon_button(c[4], "down", ch_key(f"dn3_{i}"), ch_edit_layers, ("down", i), disabled=i == len(spec) - 1)
+        icon_button(c[5], "delete", ch_key(f"del3_{i}"), ch_edit_layers, ("delete", i), disabled=len(spec) == 1)
     a1, a2 = st.columns([3, 1])
     a1.selectbox("추가할 재료", LV3_PRESETS, key=ch_key("new3"), label_visibility="collapsed")
     a2.button("➕ 층 추가 (실내 쪽 끝)", key=ch_key("add3"), on_click=ch_edit_layers, args=("add",), width="stretch")
