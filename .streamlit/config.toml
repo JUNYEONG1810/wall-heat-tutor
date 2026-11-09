@@ -1,0 +1,4 @@
+# Streamlit 설정 (로컬 실행과 Community Cloud 공통)
+# 그래프와 화면 캡처가 밝은 배경 기준이라, 보는 PC 가 다크 모드여도 항상 라이트 테마로 연다.
+[theme]
+base = "light"

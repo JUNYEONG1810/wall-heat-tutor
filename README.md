@@ -19,10 +19,10 @@
 
 ## 로컬 실행
 
-Python 3.10 이상이 필요합니다 (3.14 에서 확인).
+Python 3.10 이상이 필요합니다 (3.12, 3.14 에서 확인).
 
 ```bash
-git clone <저장소 주소>
+git clone https://github.com/JUNYEONG1810/wall-heat-tutor.git
 cd wall-heat-tutor
 python -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
@@ -32,13 +32,23 @@ streamlit run app.py
 
 브라우저에서 `http://localhost:8501` 이 열립니다. API 키와 강의 정리본이 없어도 벽체 실험실과 개념 점검은 바로 쓸 수 있습니다.
 
-테스트:
+테스트 (pytest 는 개발용 `requirements-dev.txt` 에 있습니다):
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
 정리본이 없는 저장소 상태에서는 정리본이 필요한 테스트 2개가 건너뛰어집니다(skipped).
+
+## 웹 배포 (Streamlit Community Cloud)
+
+Python 이 없는 PC 에서도 브라우저로 쓸 수 있도록 Streamlit Community Cloud 에 배포할 수 있습니다.
+
+- 진입 파일: `app.py` (저장소 루트), 의존성: `requirements.txt`, Python: 기본값 3.12 로 동작 확인
+- `.streamlit/config.toml` 이 라이트 테마를 고정하므로, 보는 PC 가 다크 모드여도 화면이 같습니다.
+- 배포본에는 API 키와 강의 정리본이 없으므로 AI 튜터 탭은 안내와 캡처 예시만 보이고, 벽체 실험실·개념 점검·설계 챌린지는 모두 동작합니다.
+- 12시간 동안 접속이 없으면 앱이 잠들고, 다음 접속 때 "Yes, get this app back up!" 버튼으로 깨웁니다 (깨어나는 데 잠시 걸림).
 
 ## AI 튜터 설정 (선택)
 
@@ -121,6 +131,9 @@ challenge.py    설계 챌린지: 레벨 정의·판정·힌트 (계산은 calc.
 data/           강의 정리본 자리 (저장소에는 미포함, data/README.md 참고)
 docs/screenshots/  AI 튜터 캡처 이미지
 tests/          pytest (계산 엔진, 튜터 공통 함수, 퀴즈, 설계 챌린지)
+requirements.txt      앱 실행 의존성 (클라우드 배포용)
+requirements-dev.txt  + pytest (개발·테스트용)
+.streamlit/config.toml  라이트 테마 고정
 ```
 
 ## 부호 규약 (정리본 02강)

@@ -1,11 +1,8 @@
-# 앱 실행 (Python 3.10 이상, 3.14 에서 확인)
+# 앱 실행 (Python 3.10 이상, 3.12·3.14 에서 확인. Streamlit Community Cloud 기본값 3.12)
 streamlit>=1.57,<2      # st.tabs(key=...) 로 퀴즈 → 실험실 탭 전환
 plotly>=7.1,<8
 python-dotenv>=1.2,<2
 
-# AI 튜터 (키가 없으면 쓰이지 않음)
+# AI 튜터 (.env 에 키가 있을 때만 쓰임. 키가 없으면 불러오지 않음)
 google-genai>=3.0,<4
 anthropic>=2.6,<3
-
-# 테스트
-pytest>=9.2,<10
